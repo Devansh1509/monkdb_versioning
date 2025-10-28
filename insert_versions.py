@@ -8,6 +8,9 @@ DB_USER = "devansh"
 DB_PASSWORD = "devansh"
 DB_SCHEMA = "public"
 TABLE_NAME = "customer_data"
+REPO_LOCATION = "/tmp/monk_snapshots/"
+SNAPSHOT_REPO = "repo"
+SNAPSHOT_NAME = "snap_v1"
 
 print("🚀 Connecting to MonkDB...")
 connection = client.connect(
@@ -17,6 +20,18 @@ connection = client.connect(
 cursor = connection.cursor()
 print("✅ Connected to MonkDB successfully.\n")
 
+print(f"🗂️ Ensuring snapshot repository '{SNAPSHOT_REPO}' exists...")
+cursor.execute(f"""
+CREATE REPOSITORY IF NOT EXISTS {SNAPSHOT_REPO}
+TYPE fs
+WITH (location = '{REPO_LOCATION}');
+""")
+connection.commit()
+
+# ================================
+# CREATE TABLE
+# ================================
+print("🧱 Creating table...")
 cursor.execute(f"DROP TABLE IF EXISTS {DB_SCHEMA}.{TABLE_NAME}")
 cursor.execute(f"""
 CREATE TABLE IF NOT EXISTS {DB_SCHEMA}.{TABLE_NAME} (
@@ -30,9 +45,11 @@ CREATE TABLE IF NOT EXISTS {DB_SCHEMA}.{TABLE_NAME} (
 )
 """)
 connection.commit()
-print("✅ Table created successfully.\n")
 
-print("📥 Loading and inserting Version 1 data...")
+# ================================
+# INSERT VERSION 1 DATA
+# ================================
+print("📥 Loading Version 1 data...")
 df_v1 = pd.read_csv("data_v1.csv")
 for _, row in df_v1.iterrows():
     cursor.execute(f"""
@@ -43,19 +60,26 @@ for _, row in df_v1.iterrows():
 connection.commit()
 
 cursor.execute(f"SELECT COUNT(*) FROM {DB_SCHEMA}.{TABLE_NAME} WHERE version=1")
-count_v1 = cursor.fetchone()[0]
-print(f"✅ Inserted {count_v1} records for version 1.\n")
+v1_count = cursor.fetchone()[0]
+print(f"✅ Inserted {v1_count} records for version 1.\n")
 
-snapshot_name = "repo.snap_v1"
+# ================================
+# CREATE SNAPSHOT
+# ================================
+snapshot_name = f"{SNAPSHOT_REPO}.{SNAPSHOT_NAME}"
 print(f"📸 Creating snapshot: {snapshot_name} ...")
 cursor.execute(f"""
 CREATE SNAPSHOT {snapshot_name}
 TABLE {DB_SCHEMA}.{TABLE_NAME}
 WITH (wait_for_completion = true)
 """)
+connection.commit()
 print("✅ Snapshot created successfully.\n")
 
-print("📥 Loading and inserting Version 2 data...")
+# ================================
+# INSERT VERSION 2 DATA
+# ================================
+print("📥 Loading Version 2 data...")
 df_v2 = pd.read_csv("data_v2.csv")
 for _, row in df_v2.iterrows():
     cursor.execute(f"""
@@ -67,32 +91,7 @@ connection.commit()
 
 cursor.execute(f"SELECT COUNT(*) FROM {DB_SCHEMA}.{TABLE_NAME}")
 total_count = cursor.fetchone()[0]
-print(f"✅ Version 2 data inserted. Total records now: {total_count}\n")
+print(f"✅ Version 2 inserted successfully. Total records: {total_count}\n")
 
-cursor.execute(f"SELECT COUNT(*) FROM {DB_SCHEMA}.{TABLE_NAME} WHERE version=1")
-v1_count = cursor.fetchone()[0]
-cursor.execute(f"SELECT COUNT(*) FROM {DB_SCHEMA}.{TABLE_NAME} WHERE version=2")
-v2_count = cursor.fetchone()[0]
-print(f"📊 Record Count Before Rollback → v1: {v1_count}, v2: {v2_count}\n")
-
-print("⏪ Rolling back to Version 1...")
-cursor.execute(f"""
-RESTORE SNAPSHOT {snapshot_name}
-TABLE {DB_SCHEMA}.{TABLE_NAME} AS {DB_SCHEMA}.{TABLE_NAME}_restored
-WITH (wait_for_completion = true)
-""")
-connection.commit()
-print("✅ Restored snapshot as separate table.\n")
-
-print("🔄 Swapping active table with restored v1 table...")
-cursor.execute(f"""
-ALTER CLUSTER SWAP TABLE {DB_SCHEMA}.{TABLE_NAME} TO {DB_SCHEMA}.{TABLE_NAME}_restored
-""")
-connection.commit()
-print("✅ Rollback completed successfully!\n")
-
-cursor.execute(f"SELECT COUNT(*) FROM {DB_SCHEMA}.{TABLE_NAME}")
-final_count = cursor.fetchone()[0]
-print(f"📊 Record Count After Rollback → {final_count} rows (should equal v1 count = {v1_count})\n")
-
-print("🎯 MonkDB Versioning + Rollback Demo Completed Successfully ✅")
+print("🎯 Step 1 Completed — Snapshot created and both versions inserted.")
+print("👉 You can now check MonkDB for versioned data before running rollback.")
