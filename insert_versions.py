@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 from monkdb import client
+from monkdb.client.exceptions import MonkProgrammingError
 
 DB_HOST = "localhost"
 DB_PORT = 4200
@@ -8,9 +9,17 @@ DB_USER = "devansh"
 DB_PASSWORD = "devansh"
 DB_SCHEMA = "public"
 TABLE_NAME = "customer_data"
-REPO_LOCATION = "/tmp/monk_snapshots/"
-SNAPSHOT_REPO = "repo"
+REPO_NAME = "repo"
+REPO_LOCATION = "/tmp/monk_snapshots"
 SNAPSHOT_NAME = "snap_v1"
+
+def safe_create_repository(cursor):
+    # MonkDB may error if repository exists; attempt create and ignore "already exists" errors.
+    try:
+        cursor.execute(f"CREATE REPOSITORY {REPO_NAME} TYPE fs WITH (location = '{REPO_LOCATION}')")
+    except MonkProgrammingError as e:
+        # If the repo already exists, a specific error will be raised; just print and continue.
+        print(f"ℹ️ Repository creation warning (may already exist): {e}")
 
 print("🚀 Connecting to MonkDB...")
 connection = client.connect(
@@ -20,18 +29,11 @@ connection = client.connect(
 cursor = connection.cursor()
 print("✅ Connected to MonkDB successfully.\n")
 
-print(f"🗂️ Ensuring snapshot repository '{SNAPSHOT_REPO}' exists...")
-cursor.execute(f"""
-CREATE REPOSITORY IF NOT EXISTS {SNAPSHOT_REPO}
-TYPE fs
-WITH (location = '{REPO_LOCATION}');
-""")
-connection.commit()
+print("🗂️ Ensuring snapshot repository exists (or create)...")
+safe_create_repository(cursor)
+print(f"✅ Repository '{REPO_NAME}' ensured at {REPO_LOCATION}\n")
 
-# ================================
-# CREATE TABLE
-# ================================
-print("🧱 Creating table...")
+# Create table
 cursor.execute(f"DROP TABLE IF EXISTS {DB_SCHEMA}.{TABLE_NAME}")
 cursor.execute(f"""
 CREATE TABLE IF NOT EXISTS {DB_SCHEMA}.{TABLE_NAME} (
@@ -45,53 +47,39 @@ CREATE TABLE IF NOT EXISTS {DB_SCHEMA}.{TABLE_NAME} (
 )
 """)
 connection.commit()
+print("✅ Table created successfully.\n")
 
-# ================================
-# INSERT VERSION 1 DATA
-# ================================
-print("📥 Loading Version 1 data...")
+# Insert V1
+print("📥 Loading and inserting Version 1 data (data_v1.csv)...")
 df_v1 = pd.read_csv("data_v1.csv")
 for _, row in df_v1.iterrows():
-    cursor.execute(f"""
-        INSERT INTO {DB_SCHEMA}.{TABLE_NAME}
+    cursor.execute(f"""INSERT INTO {DB_SCHEMA}.{TABLE_NAME}
         (id, name, city, country, purchase_amount, loyalty_score, version)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, [int(row.id), row.name, row.city, row.country, row.purchase_amount, row.loyalty_score, 1])
+    """, [int(row.id), row.name, row.city, row.country, float(row.purchase_amount), float(row.loyalty_score), 1])
 connection.commit()
-
 cursor.execute(f"SELECT COUNT(*) FROM {DB_SCHEMA}.{TABLE_NAME} WHERE version=1")
-v1_count = cursor.fetchone()[0]
-print(f"✅ Inserted {v1_count} records for version 1.\n")
+count_v1 = cursor.fetchone()[0]
+print(f"✅ Inserted {count_v1} records for version 1.\n")
 
-# ================================
-# CREATE SNAPSHOT
-# ================================
-snapshot_name = f"{SNAPSHOT_REPO}.{SNAPSHOT_NAME}"
-print(f"📸 Creating snapshot: {snapshot_name} ...")
-cursor.execute(f"""
-CREATE SNAPSHOT {snapshot_name}
-TABLE {DB_SCHEMA}.{TABLE_NAME}
-WITH (wait_for_completion = true)
-""")
+# Create snapshot
+snapshot_full = f"{REPO_NAME}.{SNAPSHOT_NAME}"
+print(f"📸 Creating snapshot: {snapshot_full} ...")
+cursor.execute(f"""CREATE SNAPSHOT {snapshot_full} TABLE {DB_SCHEMA}.{TABLE_NAME} WITH (wait_for_completion = true)""")
 connection.commit()
 print("✅ Snapshot created successfully.\n")
 
-# ================================
-# INSERT VERSION 2 DATA
-# ================================
-print("📥 Loading Version 2 data...")
+# Insert V2
+print("📥 Loading and inserting Version 2 data (data_v2.csv)...")
 df_v2 = pd.read_csv("data_v2.csv")
 for _, row in df_v2.iterrows():
-    cursor.execute(f"""
-        INSERT INTO {DB_SCHEMA}.{TABLE_NAME}
+    cursor.execute(f"""INSERT INTO {DB_SCHEMA}.{TABLE_NAME}
         (id, name, city, country, purchase_amount, loyalty_score, version)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, [int(row.id), row.name, row.city, row.country, row.purchase_amount, row.loyalty_score, 2])
+    """, [int(row.id), row.name, row.city, row.country, float(row.purchase_amount), float(row.loyalty_score), 2])
 connection.commit()
-
 cursor.execute(f"SELECT COUNT(*) FROM {DB_SCHEMA}.{TABLE_NAME}")
-total_count = cursor.fetchone()[0]
-print(f"✅ Version 2 inserted successfully. Total records: {total_count}\n")
+total = cursor.fetchone()[0]
+print(f"✅ Inserted v2 data. Total rows now: {total}\n")
 
-print("🎯 Step 1 Completed — Snapshot created and both versions inserted.")
-print("👉 You can now check MonkDB for versioned data before running rollback.")
+print("🎯 insert_versions.py completed. Inspect the table in MonkDB before running rollback_to_v1.py.")
